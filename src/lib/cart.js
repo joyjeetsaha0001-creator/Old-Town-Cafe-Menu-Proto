@@ -1,11 +1,90 @@
 const CART_KEY = "old-town-cafe-cart";
 const ORDER_KEY = "old-town-cafe-order";
 const TABLE_KEY = "old-town-cafe-table";
-const ACTIVE_ORDER_KEY = "old-town-cafe-active-order";
+
+const CART_EXPIRY_TIME = 10 * 60 * 1000;
+
+let cartExpiryTimer = null;
 
 function isBrowser() {
   return typeof window !== "undefined";
 }
+
+
+/* =========================================================
+   CART EXPIRY
+========================================================= */
+
+/*
+  The plate is temporary.
+
+  Every time the user adds/removes/increases/decreases
+  an item, the 10-minute timer is refreshed.
+
+  After 10 minutes without any plate activity,
+  ONLY the cart is cleared.
+
+  The saved order and QR-related order data are untouched.
+*/
+
+function scheduleCartExpiry(lastUpdated) {
+  if (!isBrowser()) {
+    return;
+  }
+
+  if (cartExpiryTimer) {
+    window.clearTimeout(cartExpiryTimer);
+    cartExpiryTimer = null;
+  }
+
+  const updatedAt = Number(lastUpdated);
+
+  if (!Number.isFinite(updatedAt)) {
+    return;
+  }
+
+  const remainingTime =
+    CART_EXPIRY_TIME -
+    (Date.now() - updatedAt);
+
+  /*
+    If the cart is already expired,
+    clear it immediately.
+  */
+
+  if (remainingTime <= 0) {
+    expireCart();
+    return;
+  }
+
+  cartExpiryTimer = window.setTimeout(() => {
+    expireCart();
+  }, remainingTime);
+}
+
+
+function expireCart() {
+  if (!isBrowser()) {
+    return;
+  }
+
+  if (cartExpiryTimer) {
+    window.clearTimeout(cartExpiryTimer);
+    cartExpiryTimer = null;
+  }
+
+  localStorage.removeItem(CART_KEY);
+
+  /*
+    Tell PlateBar, PlatePage and any other
+    cart listeners that the plate changed.
+  */
+
+  window.dispatchEvent(
+    new Event("cart-updated")
+  );
+}
+
 
 /* =========================================================
    CART
@@ -17,129 +96,181 @@ export function getCart() {
   }
 
   try {
-    const stored = localStorage.getItem(CART_KEY);
+    const stored =
+      localStorage.getItem(CART_KEY);
 
     if (!stored) {
       return [];
     }
 
-    const parsed = JSON.parse(stored);
+    const parsed =
+      JSON.parse(stored);
 
-    return Array.isArray(parsed) ? parsed : [];
+    /*
+      NEW FORMAT
+
+      {
+        items: [...],
+        lastUpdated: 123456789
+      }
+    */
+
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Array.isArray(parsed.items)
+    ) {
+      const lastUpdated =
+        Number(parsed.lastUpdated);
+
+      /*
+        Invalid timestamp = remove
+        potentially corrupted/stale cart.
+      */
+
+      if (!Number.isFinite(lastUpdated)) {
+        localStorage.removeItem(CART_KEY);
+        return [];
+      }
+
+      /*
+        Check expiry whenever the cart
+        is accessed.
+
+        This also handles the situation
+        where the user closes the browser,
+        returns tomorrow, and opens the menu.
+      */
+
+      if (
+        Date.now() - lastUpdated >=
+        CART_EXPIRY_TIME
+      ) {
+        localStorage.removeItem(CART_KEY);
+
+        if (cartExpiryTimer) {
+          window.clearTimeout(cartExpiryTimer);
+          cartExpiryTimer = null;
+        }
+
+        return [];
+      }
+
+      /*
+        Keep the automatic expiry timer alive
+        while the application is open.
+      */
+
+      scheduleCartExpiry(lastUpdated);
+
+      return parsed.items;
+    }
+
+    /*
+      OLD CART FORMAT
+
+      Older versions of the application stored
+      the cart directly as an array.
+
+      We intentionally clear that old format
+      instead of carrying potentially stale
+      items into the new expiry system.
+    */
+
+    if (Array.isArray(parsed)) {
+      localStorage.removeItem(CART_KEY);
+      return [];
+    }
+
+    localStorage.removeItem(CART_KEY);
+    return [];
+
   } catch {
+    localStorage.removeItem(CART_KEY);
     return [];
   }
 }
+
 
 export function saveCart(cart) {
   if (!isBrowser()) {
     return;
   }
 
-  localStorage.setItem(CART_KEY, JSON.stringify(cart));
-
-  window.dispatchEvent(new Event("cart-updated"));
-}
-
-export function addToCart(item) {
-  const cart = getCart();
-
-  const variantName = String(
-    item?.variantName || "Regular"
-  ).trim();
-
-  const baseName = String(
-    item?.name || "Item"
-  ).trim();
-
   /*
-    Make the displayed cart name clear.
-
-    Example:
-
-    baseName:
-      Fried Rice
-
-    variant:
-      Mix Non-Veg
-
-    result:
-      Mix Non-Veg Fried Rice
+    Every cart modification refreshes
+    the 10-minute inactivity period.
   */
 
-  const displayName =
-    variantName &&
-    variantName.toLowerCase() !== "regular" &&
-    !baseName
-      .toLowerCase()
-      .includes(variantName.toLowerCase())
-      ? `${variantName} ${baseName}`
-      : baseName;
+  const lastUpdated =
+    Date.now();
 
-  /*
-    Each variant gets its own cart entry.
+  const cartData = {
+    items: Array.isArray(cart)
+      ? cart
+      : [],
+    lastUpdated,
+  };
 
-    Example:
-
-    Fried Rice - Egg
-    Fried Rice - Chicken
-
-    are treated as separate items.
-  */
-
-  const cartItemId = `${item.id}__${variantName
-    .toLowerCase()
-    .replace(/\s+/g, "-")}`;
-
-  const existingItem = cart.find(
-    (cartItem) =>
-      cartItem.id === cartItemId
+  localStorage.setItem(
+    CART_KEY,
+    JSON.stringify(cartData)
   );
 
+  /*
+    Start/reset automatic expiry.
+  */
+
+  scheduleCartExpiry(
+    lastUpdated
+  );
+
+  /*
+    Notify components such as PlateBar
+    and PlatePage.
+  */
+
+  window.dispatchEvent(
+    new Event("cart-updated")
+  );
+}
+
+
+export function addToCart(item) {
+  const cart =
+    getCart();
+
+  const existingItem =
+    cart.find(
+      (cartItem) =>
+        cartItem.id === item.id &&
+        cartItem.variantName ===
+          item.variantName
+    );
+
   if (existingItem) {
-    existingItem.quantity =
-      Number(existingItem.quantity || 0) + 1;
-
-    existingItem.name =
-      displayName;
-
-    existingItem.baseName =
-      baseName;
-
-    existingItem.variantName =
-      variantName;
-
-    existingItem.price =
-      Number(item.price || 0);
-
-    existingItem.image =
-      item.image ||
-      existingItem.image ||
-      null;
+    existingItem.quantity += 1;
   } else {
     cart.push({
-      id: cartItemId,
+      id: item.id,
 
-      menuItemId:
-        item.id,
+      name: item.name,
 
-      name:
-        displayName,
-
-      baseName:
-        baseName,
+      /*
+        Keep the selected variant name.
+        This also prevents two variants of the
+        same item from getting mixed together.
+      */
 
       variantName:
-        variantName,
+        item.variantName || "",
 
-      price:
-        Number(item.price || 0),
+      price: Number(
+        item.price || 0
+      ),
 
-      quantity:
-        1,
-
-      image:
-        item.image || null,
+      quantity: 1,
     });
   }
 
@@ -148,45 +279,49 @@ export function addToCart(item) {
   return cart;
 }
 
-export function increaseQuantity(id) {
-  const cart = getCart();
 
-  const item = cart.find(
-    (cartItem) =>
-      cartItem.id === id
-  );
+export function increaseQuantity(id) {
+  const cart =
+    getCart();
+
+  const item =
+    cart.find(
+      (cartItem) =>
+        cartItem.id === id
+    );
 
   if (!item) {
     return cart;
   }
 
-  item.quantity =
-    Number(item.quantity || 0) + 1;
+  item.quantity += 1;
 
   saveCart(cart);
 
   return cart;
 }
 
-export function decreaseQuantity(id) {
-  const cart = getCart();
 
-  const item = cart.find(
-    (cartItem) =>
-      cartItem.id === id
-  );
+export function decreaseQuantity(id) {
+  const cart =
+    getCart();
+
+  const item =
+    cart.find(
+      (cartItem) =>
+        cartItem.id === id
+    );
 
   if (!item) {
     return cart;
   }
 
-  item.quantity =
-    Number(item.quantity || 0) - 1;
+  item.quantity -= 1;
 
   const updatedCart =
     cart.filter(
       (cartItem) =>
-        Number(cartItem.quantity || 0) > 0
+        cartItem.quantity > 0
     );
 
   saveCart(updatedCart);
@@ -194,36 +329,53 @@ export function decreaseQuantity(id) {
   return updatedCart;
 }
 
+
 export function clearCart() {
   if (!isBrowser()) {
     return;
   }
 
-  localStorage.removeItem(CART_KEY);
+  if (cartExpiryTimer) {
+    window.clearTimeout(cartExpiryTimer);
+    cartExpiryTimer = null;
+  }
+
+  localStorage.removeItem(
+    CART_KEY
+  );
 
   window.dispatchEvent(
     new Event("cart-updated")
   );
 }
 
+
 export function getCartCount() {
   return getCart().reduce(
     (total, item) =>
       total +
-      Number(item.quantity || 0),
+      Number(
+        item.quantity || 0
+      ),
     0
   );
 }
+
 
 export function getCartTotal() {
   return getCart().reduce(
     (total, item) =>
       total +
-      Number(item.price || 0) *
-        Number(item.quantity || 0),
+      Number(
+        item.price || 0
+      ) *
+        Number(
+          item.quantity || 0
+        ),
     0
   );
 }
+
 
 /* =========================================================
    TABLE
@@ -240,16 +392,19 @@ export function saveTable(table) {
   );
 }
 
+
 export function getTable() {
   if (!isBrowser()) {
     return "T12";
   }
 
   return (
-    localStorage.getItem(TABLE_KEY) ||
-    "T12"
+    localStorage.getItem(
+      TABLE_KEY
+    ) || "T12"
   );
 }
+
 
 /* =========================================================
    ORDER
@@ -257,8 +412,12 @@ export function getTable() {
 
 export function generateOrderId() {
   /*
-    crypto.randomUUID gives us a genuinely new order ID
+    Generate a genuinely new ID
     for every checkout.
+
+    Example:
+
+    OTC-8F31A7C2
   */
 
   if (
@@ -276,7 +435,7 @@ export function generateOrderId() {
   }
 
   /*
-    Fallback for browsers without randomUUID.
+    Fallback.
   */
 
   const timestamp =
@@ -293,25 +452,28 @@ export function generateOrderId() {
   return `OTC-${timestamp}-${random}`;
 }
 
+
 export function createOrder() {
   if (!isBrowser()) {
     return null;
   }
 
-  const cart = getCart();
+  /*
+    ALWAYS take the current plate.
+
+    getCart() also checks whether the plate
+    has expired before creating an order.
+  */
+
+  const cart =
+    getCart();
 
   if (cart.length === 0) {
     return null;
   }
 
   /*
-    IMPORTANT:
-
-    Create a completely NEW snapshot
-    of the CURRENT plate.
-
-    This prevents yesterday's order from
-    being reused.
+    Create a completely NEW order.
   */
 
   const order = {
@@ -325,46 +487,39 @@ export function createOrder() {
       getTable(),
 
     items:
-      cart.map((item) => ({
-        id:
-          item.id,
+      cart.map(
+        (item) => ({
+          id:
+            item.id,
 
-        menuItemId:
-          item.menuItemId ||
-          item.id,
+          name:
+            item.name,
 
-        /*
-          Store the FULL display name.
-        */
+          variantName:
+            item.variantName || "",
 
-        name:
-          item.name,
+          price:
+            Number(
+              item.price || 0
+            ),
 
-        baseName:
-          item.baseName ||
-          item.name,
-
-        variantName:
-          item.variantName ||
-          "Regular",
-
-        price:
-          Number(item.price || 0),
-
-        quantity:
-          Number(item.quantity || 0),
-
-        image:
-          item.image ||
-          null,
-      })),
+          quantity:
+            Number(
+              item.quantity || 0
+            ),
+        })
+      ),
 
     total:
       cart.reduce(
         (total, item) =>
           total +
-          Number(item.price || 0) *
-            Number(item.quantity || 0),
+          Number(
+            item.price || 0
+          ) *
+            Number(
+              item.quantity || 0
+            ),
         0
       ),
 
@@ -373,10 +528,10 @@ export function createOrder() {
   };
 
   /*
-    Store the latest order ONLY on the
-    customer's device.
+    Save this NEW order.
 
-    The waiter page does NOT use this.
+    This replaces the previous order stored
+    on this device.
   */
 
   localStorage.setItem(
@@ -385,23 +540,20 @@ export function createOrder() {
   );
 
   /*
-    Remember which order is currently
-    being displayed on the customer's QR page.
+    The order has successfully been created.
+
+    Empty the customer's temporary plate.
+
+    IMPORTANT:
+    This only removes CART_KEY.
+    It does NOT remove ORDER_KEY.
   */
 
-  sessionStorage.setItem(
-    ACTIVE_ORDER_KEY,
-    order.orderId
-  );
+  clearCart();
 
   /*
-    IMPORTANT:
-
-    DO NOT clear the cart here.
-
-    This is what allows the customer to
-    press Back from the QR page and still
-    have all their selected items.
+    Tell any component listening
+    that a new order was created.
   */
 
   window.dispatchEvent(
@@ -411,40 +563,13 @@ export function createOrder() {
   return order;
 }
 
-export function getOrder(
-  orderId = null
-) {
+
+export function getOrder() {
   if (!isBrowser()) {
     return null;
   }
 
   try {
-    /*
-      Only the currently active order can
-      be displayed on the customer's device.
-    */
-
-    const activeOrderId =
-      sessionStorage.getItem(
-        ACTIVE_ORDER_KEY
-      );
-
-    if (!activeOrderId) {
-      return null;
-    }
-
-    /*
-      If the URL contains an order ID,
-      it MUST match the current active order.
-    */
-
-    if (
-      orderId &&
-      orderId !== activeOrderId
-    ) {
-      return null;
-    }
-
     const stored =
       localStorage.getItem(
         ORDER_KEY
@@ -466,28 +591,20 @@ export function getOrder(
 
     if (
       !order.orderId ||
-      !Array.isArray(order.items)
-    ) {
-      return null;
-    }
-
-    /*
-      This is the important protection against
-      yesterday's order appearing again.
-    */
-
-    if (
-      order.orderId !==
-      activeOrderId
+      !Array.isArray(
+        order.items
+      )
     ) {
       return null;
     }
 
     return order;
+
   } catch {
     return null;
   }
 }
+
 
 export function clearOrder() {
   if (!isBrowser()) {
@@ -497,295 +614,4 @@ export function clearOrder() {
   localStorage.removeItem(
     ORDER_KEY
   );
-
-  sessionStorage.removeItem(
-    ACTIVE_ORDER_KEY
-  );
-}
-
-/* =========================================================
-   QR / CROSS-DEVICE ORDER LINK
-========================================================= */
-
-/*
-  The QR DOES NOT contain the complete
-  readable order anymore.
-
-  It contains a URL like:
-
-  https://your-domain.com/order/view?data=...
-
-  The waiter scans that URL and gets
-  the complete order page.
-*/
-
-/* =========================================================
-   BASE64 URL ENCODING
-========================================================= */
-
-function base64UrlEncode(value) {
-  const bytes =
-    new TextEncoder().encode(value);
-
-  let binary = "";
-
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
-}
-
-function base64UrlDecode(value) {
-  const normalized =
-    String(value)
-      .replace(/-/g, "+")
-      .replace(/_/g, "/");
-
-  const padded =
-    normalized +
-    "=".repeat(
-      (4 -
-        (normalized.length % 4)) %
-        4
-    );
-
-  const binary =
-    atob(padded);
-
-  const bytes =
-    new Uint8Array(
-      binary.length
-    );
-
-  for (
-    let index = 0;
-    index < binary.length;
-    index += 1
-  ) {
-    bytes[index] =
-      binary.charCodeAt(index);
-  }
-
-  return new TextDecoder().decode(
-    bytes
-  );
-}
-
-/* =========================================================
-   ENCODE ORDER FOR QR URL
-========================================================= */
-
-export function encodeOrderForUrl(
-  order
-) {
-  if (
-    !isBrowser() ||
-    !order
-  ) {
-    return "";
-  }
-
-  /*
-    Compact payload.
-
-    Short property names make the QR
-    easier to scan.
-  */
-
-  const payload = {
-    v: 1,
-
-    o:
-      String(
-        order.orderId || ""
-      ),
-
-    c:
-      String(
-        order.cafe ||
-          "Old Town Cafe"
-      ),
-
-    t:
-      String(
-        order.table ||
-          "T12"
-      ),
-
-    d:
-      order.createdAt ||
-      new Date().toISOString(),
-
-    x:
-      Number(
-        order.total || 0
-      ),
-
-    i:
-      (
-        Array.isArray(
-          order.items
-        )
-          ? order.items
-          : []
-      ).map((item) => ({
-        /*
-          Store the FULL item name.
-        */
-
-        n:
-          String(
-            item.name ||
-              item.baseName ||
-              "Item"
-          ),
-
-        p:
-          Number(
-            item.price || 0
-          ),
-
-        q:
-          Number(
-            item.quantity || 0
-          ),
-
-        v:
-          String(
-            item.variantName ||
-              "Regular"
-          ),
-      })),
-  };
-
-  return base64UrlEncode(
-    JSON.stringify(payload)
-  );
-}
-
-/* =========================================================
-   DECODE ORDER FROM QR URL
-========================================================= */
-
-export function decodeOrderFromUrl(
-  encodedOrder
-) {
-  if (
-    !isBrowser() ||
-    !encodedOrder
-  ) {
-    return null;
-  }
-
-  try {
-    const payload =
-      JSON.parse(
-        base64UrlDecode(
-          encodedOrder
-        )
-      );
-
-    if (
-      !payload ||
-      payload.v !== 1
-    ) {
-      return null;
-    }
-
-    if (
-      !payload.o ||
-      !Array.isArray(
-        payload.i
-      )
-    ) {
-      return null;
-    }
-
-    const items =
-      payload.i
-        .map(
-          (item, index) => ({
-            id:
-              `qr-${payload.o}-${index}`,
-
-            name:
-              String(
-                item.n ||
-                  "Item"
-              ),
-
-            price:
-              Number(
-                item.p || 0
-              ),
-
-            quantity:
-              Number(
-                item.q || 0
-              ),
-
-            variantName:
-              String(
-                item.v ||
-                  "Regular"
-              ),
-          })
-        )
-        .filter(
-          (item) =>
-            item.quantity > 0
-        );
-
-    /*
-      Recalculate the total from the
-      actual items as a safety check.
-    */
-
-    const calculatedTotal =
-      items.reduce(
-        (sum, item) =>
-          sum +
-          item.price *
-            item.quantity,
-        0
-      );
-
-    return {
-      orderId:
-        String(
-          payload.o
-        ),
-
-      cafe:
-        String(
-          payload.c ||
-            "Old Town Cafe"
-        ),
-
-      table:
-        String(
-          payload.t ||
-            "T12"
-        ),
-
-      createdAt:
-        payload.d ||
-        null,
-
-      total:
-        Number.isFinite(
-          Number(payload.x)
-        )
-          ? Number(payload.x)
-          : calculatedTotal,
-
-      items,
-    };
-  } catch {
-    return null;
-  }
 }
