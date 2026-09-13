@@ -2,6 +2,13 @@ const CART_KEY = "old-town-cafe-cart";
 const ORDER_KEY = "old-town-cafe-order";
 const TABLE_KEY = "old-town-cafe-table";
 
+/*
+ * The customer's plate is temporary.
+ *
+ * It stays available for 10 minutes after the last plate
+ * modification. If the customer leaves the app and comes
+ * back later, the old plate will automatically disappear.
+ */
 const CART_EXPIRY_TIME = 10 * 60 * 1000;
 
 let cartExpiryTimer = null;
@@ -10,22 +17,63 @@ function isBrowser() {
   return typeof window !== "undefined";
 }
 
+/* =========================================================
+   ITEM DISPLAY NAME
+========================================================= */
+
+function normalizeVariantName(value) {
+  const variant = String(value || "").trim();
+
+  if (variant.toLowerCase() === "mix non-veg") {
+    return "Mixed Non-Veg";
+  }
+
+  if (variant.toLowerCase() === "mix veg") {
+    return "Mixed Veg";
+  }
+
+  return variant;
+}
+
+export function getItemDisplayName(name, variantName) {
+  const baseName = String(name || "").trim();
+  const variant = normalizeVariantName(variantName);
+
+  if (!baseName) {
+    return variant;
+  }
+
+  /*
+   * Regular items don't need a variant prefix.
+   */
+  if (
+    !variant ||
+    variant.toLowerCase() === "regular"
+  ) {
+    return baseName;
+  }
+
+  /*
+   * Don't duplicate the variant when the base item
+   * already contains it.
+   *
+   * Example:
+   * Butter Paneer/Chicken Penne
+   */
+  if (
+    baseName
+      .toLowerCase()
+      .includes(variant.toLowerCase())
+  ) {
+    return baseName;
+  }
+
+  return `${variant} ${baseName}`;
+}
 
 /* =========================================================
    CART EXPIRY
 ========================================================= */
-
-/*
-  The plate is temporary.
-
-  Every time the user adds/removes/increases/decreases
-  an item, the 10-minute timer is refreshed.
-
-  After 10 minutes without any plate activity,
-  ONLY the cart is cleared.
-
-  The saved order and QR-related order data are untouched.
-*/
 
 function scheduleCartExpiry(lastUpdated) {
   if (!isBrowser()) {
@@ -47,290 +95,18 @@ function scheduleCartExpiry(lastUpdated) {
     CART_EXPIRY_TIME -
     (Date.now() - updatedAt);
 
-  /*
-    If the cart is already expired,
-    clear it immediately.
-  */
-
   if (remainingTime <= 0) {
     expireCart();
     return;
   }
 
-  cartExpiryTimer = window.setTimeout(() => {
-    expireCart();
-  }, remainingTime);
+  cartExpiryTimer =
+    window.setTimeout(() => {
+      expireCart();
+    }, remainingTime);
 }
-
 
 function expireCart() {
-  if (!isBrowser()) {
-    return;
-  }
-
-  if (cartExpiryTimer) {
-    window.clearTimeout(cartExpiryTimer);
-    cartExpiryTimer = null;
-  }
-
-  localStorage.removeItem(CART_KEY);
-
-  /*
-    Tell PlateBar, PlatePage and any other
-    cart listeners that the plate changed.
-  */
-
-  window.dispatchEvent(
-    new Event("cart-updated")
-  );
-}
-
-
-/* =========================================================
-   CART
-========================================================= */
-
-export function getCart() {
-  if (!isBrowser()) {
-    return [];
-  }
-
-  try {
-    const stored =
-      localStorage.getItem(CART_KEY);
-
-    if (!stored) {
-      return [];
-    }
-
-    const parsed =
-      JSON.parse(stored);
-
-    /*
-      NEW FORMAT
-
-      {
-        items: [...],
-        lastUpdated: 123456789
-      }
-    */
-
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      Array.isArray(parsed.items)
-    ) {
-      const lastUpdated =
-        Number(parsed.lastUpdated);
-
-      /*
-        Invalid timestamp = remove
-        potentially corrupted/stale cart.
-      */
-
-      if (!Number.isFinite(lastUpdated)) {
-        localStorage.removeItem(CART_KEY);
-        return [];
-      }
-
-      /*
-        Check expiry whenever the cart
-        is accessed.
-
-        This also handles the situation
-        where the user closes the browser,
-        returns tomorrow, and opens the menu.
-      */
-
-      if (
-        Date.now() - lastUpdated >=
-        CART_EXPIRY_TIME
-      ) {
-        localStorage.removeItem(CART_KEY);
-
-        if (cartExpiryTimer) {
-          window.clearTimeout(cartExpiryTimer);
-          cartExpiryTimer = null;
-        }
-
-        return [];
-      }
-
-      /*
-        Keep the automatic expiry timer alive
-        while the application is open.
-      */
-
-      scheduleCartExpiry(lastUpdated);
-
-      return parsed.items;
-    }
-
-    /*
-      OLD CART FORMAT
-
-      Older versions of the application stored
-      the cart directly as an array.
-
-      We intentionally clear that old format
-      instead of carrying potentially stale
-      items into the new expiry system.
-    */
-
-    if (Array.isArray(parsed)) {
-      localStorage.removeItem(CART_KEY);
-      return [];
-    }
-
-    localStorage.removeItem(CART_KEY);
-    return [];
-
-  } catch {
-    localStorage.removeItem(CART_KEY);
-    return [];
-  }
-}
-
-
-export function saveCart(cart) {
-  if (!isBrowser()) {
-    return;
-  }
-
-  /*
-    Every cart modification refreshes
-    the 10-minute inactivity period.
-  */
-
-  const lastUpdated =
-    Date.now();
-
-  const cartData = {
-    items: Array.isArray(cart)
-      ? cart
-      : [],
-    lastUpdated,
-  };
-
-  localStorage.setItem(
-    CART_KEY,
-    JSON.stringify(cartData)
-  );
-
-  /*
-    Start/reset automatic expiry.
-  */
-
-  scheduleCartExpiry(
-    lastUpdated
-  );
-
-  /*
-    Notify components such as PlateBar
-    and PlatePage.
-  */
-
-  window.dispatchEvent(
-    new Event("cart-updated")
-  );
-}
-
-
-export function addToCart(item) {
-  const cart =
-    getCart();
-
-  const existingItem =
-    cart.find(
-      (cartItem) =>
-        cartItem.id === item.id &&
-        cartItem.variantName ===
-          item.variantName
-    );
-
-  if (existingItem) {
-    existingItem.quantity += 1;
-  } else {
-    cart.push({
-      id: item.id,
-
-      name: item.name,
-
-      /*
-        Keep the selected variant name.
-        This also prevents two variants of the
-        same item from getting mixed together.
-      */
-
-      variantName:
-        item.variantName || "",
-
-      price: Number(
-        item.price || 0
-      ),
-
-      quantity: 1,
-    });
-  }
-
-  saveCart(cart);
-
-  return cart;
-}
-
-
-export function increaseQuantity(id) {
-  const cart =
-    getCart();
-
-  const item =
-    cart.find(
-      (cartItem) =>
-        cartItem.id === id
-    );
-
-  if (!item) {
-    return cart;
-  }
-
-  item.quantity += 1;
-
-  saveCart(cart);
-
-  return cart;
-}
-
-
-export function decreaseQuantity(id) {
-  const cart =
-    getCart();
-
-  const item =
-    cart.find(
-      (cartItem) =>
-        cartItem.id === id
-    );
-
-  if (!item) {
-    return cart;
-  }
-
-  item.quantity -= 1;
-
-  const updatedCart =
-    cart.filter(
-      (cartItem) =>
-        cartItem.quantity > 0
-    );
-
-  saveCart(updatedCart);
-
-  return updatedCart;
-}
-
-
-export function clearCart() {
   if (!isBrowser()) {
     return;
   }
@@ -349,6 +125,356 @@ export function clearCart() {
   );
 }
 
+/* =========================================================
+   CART
+========================================================= */
+
+export function getCart() {
+  if (!isBrowser()) {
+    return [];
+  }
+
+  try {
+    const stored =
+      localStorage.getItem(
+        CART_KEY
+      );
+
+    if (!stored) {
+      return [];
+    }
+
+    const parsed =
+      JSON.parse(stored);
+
+    /*
+     * Current format:
+     *
+     * {
+     *   items: [...],
+     *   lastUpdated: 123456789
+     * }
+     */
+
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Array.isArray(parsed.items)
+    ) {
+      const lastUpdated =
+        Number(
+          parsed.lastUpdated
+        );
+
+      if (
+        !Number.isFinite(
+          lastUpdated
+        )
+      ) {
+        localStorage.removeItem(
+          CART_KEY
+        );
+
+        return [];
+      }
+
+      /*
+       * Check expiry every time the cart
+       * is accessed.
+       */
+      if (
+        Date.now() -
+          lastUpdated >=
+        CART_EXPIRY_TIME
+      ) {
+        localStorage.removeItem(
+          CART_KEY
+        );
+
+        if (cartExpiryTimer) {
+          window.clearTimeout(
+            cartExpiryTimer
+          );
+
+          cartExpiryTimer = null;
+        }
+
+        return [];
+      }
+
+      /*
+       * Keep the automatic timer running.
+       */
+      scheduleCartExpiry(
+        lastUpdated
+      );
+
+      /*
+       * Normalize older entries too.
+       */
+      return parsed.items.map(
+        (item) => ({
+          ...item,
+
+          variantName:
+            normalizeVariantName(
+              item.variantName
+            ),
+
+          name:
+            getItemDisplayName(
+              item.name,
+              item.variantName
+            ),
+        })
+      );
+    }
+
+    /*
+     * Old array-only format.
+     *
+     * Clear it rather than carrying
+     * potentially stale data forward.
+     */
+    localStorage.removeItem(
+      CART_KEY
+    );
+
+    return [];
+  } catch {
+    localStorage.removeItem(
+      CART_KEY
+    );
+
+    return [];
+  }
+}
+
+/* =========================================================
+   SAVE CART
+========================================================= */
+
+export function saveCart(cart) {
+  if (!isBrowser()) {
+    return;
+  }
+
+  const lastUpdated =
+    Date.now();
+
+  const safeCart =
+    Array.isArray(cart)
+      ? cart.map(
+          (item) => ({
+            ...item,
+
+            variantName:
+              normalizeVariantName(
+                item.variantName
+              ),
+
+            name:
+              getItemDisplayName(
+                item.name,
+                item.variantName
+              ),
+          })
+        )
+      : [];
+
+  const cartData = {
+    items: safeCart,
+    lastUpdated,
+  };
+
+  localStorage.setItem(
+    CART_KEY,
+    JSON.stringify(
+      cartData
+    )
+  );
+
+  scheduleCartExpiry(
+    lastUpdated
+  );
+
+  window.dispatchEvent(
+    new Event("cart-updated")
+  );
+}
+
+/* =========================================================
+   ADD TO CART
+========================================================= */
+
+export function addToCart(item) {
+  const cart =
+    getCart();
+
+  const variantName =
+    normalizeVariantName(
+      item.variantName
+    );
+
+  const existingItem =
+    cart.find(
+      (cartItem) =>
+        cartItem.id ===
+          item.id &&
+        normalizeVariantName(
+          cartItem.variantName
+        ) === variantName
+    );
+
+  if (existingItem) {
+    existingItem.quantity += 1;
+  } else {
+    cart.push({
+      id: item.id,
+
+      /*
+       * IMPORTANT:
+       *
+       * The selected variant becomes part of the
+       * actual displayed item name.
+       *
+       * Example:
+       * Mixed Non-Veg Fried Rice
+       */
+      name:
+        getItemDisplayName(
+          item.name,
+          variantName
+        ),
+
+      variantName,
+
+      price:
+        Number(
+          item.price || 0
+        ),
+
+      quantity: 1,
+    });
+  }
+
+  saveCart(cart);
+
+  return cart;
+}
+
+/* =========================================================
+   QUANTITY
+========================================================= */
+
+export function increaseQuantity(
+  id,
+  variantName
+) {
+  const cart =
+    getCart();
+
+  const normalizedVariant =
+    normalizeVariantName(
+      variantName
+    );
+
+  const item =
+    cart.find(
+      (cartItem) =>
+        cartItem.id === id &&
+        (
+          variantName === undefined ||
+          normalizeVariantName(
+            cartItem.variantName
+          ) === normalizedVariant
+        )
+    );
+
+  if (!item) {
+    return cart;
+  }
+
+  item.quantity += 1;
+
+  saveCart(cart);
+
+  return cart;
+}
+
+export function decreaseQuantity(
+  id,
+  variantName
+) {
+  const cart =
+    getCart();
+
+  const normalizedVariant =
+    normalizeVariantName(
+      variantName
+    );
+
+  const item =
+    cart.find(
+      (cartItem) =>
+        cartItem.id === id &&
+        (
+          variantName === undefined ||
+          normalizeVariantName(
+            cartItem.variantName
+          ) === normalizedVariant
+        )
+    );
+
+  if (!item) {
+    return cart;
+  }
+
+  item.quantity -= 1;
+
+  const updatedCart =
+    cart.filter(
+      (cartItem) =>
+        cartItem.quantity > 0
+    );
+
+  saveCart(
+    updatedCart
+  );
+
+  return updatedCart;
+}
+
+/* =========================================================
+   CLEAR CART
+========================================================= */
+
+export function clearCart() {
+  if (!isBrowser()) {
+    return;
+  }
+
+  if (cartExpiryTimer) {
+    window.clearTimeout(
+      cartExpiryTimer
+    );
+
+    cartExpiryTimer = null;
+  }
+
+  localStorage.removeItem(
+    CART_KEY
+  );
+
+  window.dispatchEvent(
+    new Event("cart-updated")
+  );
+}
+
+/* =========================================================
+   CART TOTALS
+========================================================= */
 
 export function getCartCount() {
   return getCart().reduce(
@@ -360,7 +486,6 @@ export function getCartCount() {
     0
   );
 }
-
 
 export function getCartTotal() {
   return getCart().reduce(
@@ -375,7 +500,6 @@ export function getCartTotal() {
     0
   );
 }
-
 
 /* =========================================================
    TABLE
@@ -392,7 +516,6 @@ export function saveTable(table) {
   );
 }
 
-
 export function getTable() {
   if (!isBrowser()) {
     return "T12";
@@ -405,25 +528,16 @@ export function getTable() {
   );
 }
 
-
 /* =========================================================
-   ORDER
+   ORDER ID
 ========================================================= */
 
 export function generateOrderId() {
-  /*
-    Generate a genuinely new ID
-    for every checkout.
-
-    Example:
-
-    OTC-8F31A7C2
-  */
-
   if (
     isBrowser() &&
     window.crypto &&
-    window.crypto.randomUUID
+    typeof window.crypto.randomUUID ===
+      "function"
   ) {
     return (
       "OTC-" +
@@ -433,10 +547,6 @@ export function generateOrderId() {
         .toUpperCase()
     );
   }
-
-  /*
-    Fallback.
-  */
 
   const timestamp =
     Date.now()
@@ -452,29 +562,53 @@ export function generateOrderId() {
   return `OTC-${timestamp}-${random}`;
 }
 
+/* =========================================================
+   CREATE ORDER
+========================================================= */
 
 export function createOrder() {
   if (!isBrowser()) {
     return null;
   }
 
-  /*
-    ALWAYS take the current plate.
-
-    getCart() also checks whether the plate
-    has expired before creating an order.
-  */
-
   const cart =
     getCart();
 
-  if (cart.length === 0) {
+  if (
+    cart.length === 0
+  ) {
     return null;
   }
 
   /*
-    Create a completely NEW order.
-  */
+   * IMPORTANT:
+   *
+   * Every click on Place Order creates a NEW
+   * order ID and a NEW order snapshot.
+   *
+   * We DO NOT clear the cart here.
+   *
+   * Why?
+   *
+   * Customer:
+   *
+   * Menu
+   *   ↓
+   * Plate
+   *   ↓
+   * Place Order
+   *   ↓
+   * QR
+   *   ↓
+   * accidentally Back
+   *   ↓
+   * Menu
+   *   ↓
+   * same plate still available
+   *
+   * The plate is automatically removed after
+   * 10 minutes of inactivity.
+   */
 
   const order = {
     orderId:
@@ -493,10 +627,15 @@ export function createOrder() {
             item.id,
 
           name:
-            item.name,
+            getItemDisplayName(
+              item.name,
+              item.variantName
+            ),
 
           variantName:
-            item.variantName || "",
+            normalizeVariantName(
+              item.variantName
+            ),
 
           price:
             Number(
@@ -528,33 +667,16 @@ export function createOrder() {
   };
 
   /*
-    Save this NEW order.
-
-    This replaces the previous order stored
-    on this device.
-  */
-
+   * Save ONLY the latest order.
+   *
+   * This replaces yesterday's order.
+   */
   localStorage.setItem(
     ORDER_KEY,
-    JSON.stringify(order)
+    JSON.stringify(
+      order
+    )
   );
-
-  /*
-    The order has successfully been created.
-
-    Empty the customer's temporary plate.
-
-    IMPORTANT:
-    This only removes CART_KEY.
-    It does NOT remove ORDER_KEY.
-  */
-
-  clearCart();
-
-  /*
-    Tell any component listening
-    that a new order was created.
-  */
 
   window.dispatchEvent(
     new Event("order-created")
@@ -563,8 +685,13 @@ export function createOrder() {
   return order;
 }
 
+/* =========================================================
+   GET ORDER
+========================================================= */
 
-export function getOrder() {
+export function getOrder(
+  orderId
+) {
   if (!isBrowser()) {
     return null;
   }
@@ -584,12 +711,7 @@ export function getOrder() {
 
     if (
       !order ||
-      typeof order !== "object"
-    ) {
-      return null;
-    }
-
-    if (
+      typeof order !== "object" ||
       !order.orderId ||
       !Array.isArray(
         order.items
@@ -598,13 +720,54 @@ export function getOrder() {
       return null;
     }
 
-    return order;
+    /*
+     * VERY IMPORTANT:
+     *
+     * If a URL contains an order ID,
+     * return the order ONLY when the IDs match.
+     *
+     * This prevents an old localStorage order
+     * from being displayed for a newer order.
+     */
+    if (
+      orderId &&
+      String(
+        order.orderId
+      ) !==
+        String(orderId)
+    ) {
+      return null;
+    }
 
+    return {
+      ...order,
+
+      items:
+        order.items.map(
+          (item) => ({
+            ...item,
+
+            variantName:
+              normalizeVariantName(
+                item.variantName
+              ),
+
+            name:
+              getItemDisplayName(
+                item.name,
+                item.variantName
+              ),
+          })
+        ),
+    };
   } catch {
     return null;
   }
 }
 
+/* =========================================================
+   CLEAR SAVED ORDER
+========================================================= */
 
 export function clearOrder() {
   if (!isBrowser()) {
@@ -614,4 +777,326 @@ export function clearOrder() {
   localStorage.removeItem(
     ORDER_KEY
   );
+}
+
+/* =========================================================
+   QR ORDER ENCODING
+========================================================= */
+
+/*
+ * The QR contains a URL.
+ *
+ * Example:
+ *
+ * https://your-domain.com/order/view?data=eyJvcmRlcklkIjoi...
+ *
+ * The actual order is stored inside the URL as
+ * URL-safe Base64 encoded JSON.
+ *
+ * This means Google Lens doesn't need to display
+ * hundreds of characters of raw order text.
+ *
+ * Instead:
+ *
+ * QR
+ * ↓
+ * URL
+ * ↓
+ * /order/view
+ * ↓
+ * formatted waiter page
+ */
+
+/* =========================================================
+   BYTES → BASE64
+========================================================= */
+
+function bytesToBase64(
+  bytes
+) {
+  let binary = "";
+
+  const chunkSize =
+    0x8000;
+
+  for (
+    let index = 0;
+    index < bytes.length;
+    index += chunkSize
+  ) {
+    const chunk =
+      bytes.subarray(
+        index,
+        index + chunkSize
+      );
+
+    binary +=
+      String.fromCharCode(
+        ...chunk
+      );
+  }
+
+  return btoa(
+    binary
+  );
+}
+
+/* =========================================================
+   BASE64 → BYTES
+========================================================= */
+
+function base64ToBytes(
+  base64
+) {
+  const binary =
+    atob(base64);
+
+  const bytes =
+    new Uint8Array(
+      binary.length
+    );
+
+  for (
+    let index = 0;
+    index < binary.length;
+    index += 1
+  ) {
+    bytes[index] =
+      binary.charCodeAt(
+        index
+      );
+  }
+
+  return bytes;
+}
+
+/* =========================================================
+   ENCODE ORDER
+========================================================= */
+
+export function encodeOrderForUrl(
+  order
+) {
+  if (!order) {
+    return "";
+  }
+
+  if (
+    typeof TextEncoder ===
+      "undefined" ||
+    typeof btoa ===
+      "undefined"
+  ) {
+    throw new Error(
+      "Browser encoding APIs are unavailable."
+    );
+  }
+
+  const normalizedOrder =
+    {
+      ...order,
+
+      items:
+        Array.isArray(
+          order.items
+        )
+          ? order.items.map(
+              (item) => ({
+                id:
+                  item.id,
+
+                name:
+                  getItemDisplayName(
+                    item.name,
+                    item.variantName
+                  ),
+
+                variantName:
+                  normalizeVariantName(
+                    item.variantName
+                  ),
+
+                price:
+                  Number(
+                    item.price || 0
+                  ),
+
+                quantity:
+                  Number(
+                    item.quantity || 0
+                  ),
+              })
+            )
+          : [],
+    };
+
+  const json =
+    JSON.stringify(
+      normalizedOrder
+    );
+
+  const bytes =
+    new TextEncoder().encode(
+      json
+    );
+
+  return bytesToBase64(
+    bytes
+  )
+    .replace(
+      /\+/g,
+      "-"
+    )
+    .replace(
+      /\//g,
+      "_"
+    )
+    .replace(
+      /=+$/g,
+      ""
+    );
+}
+
+/* =========================================================
+   DECODE ORDER
+========================================================= */
+
+export function decodeOrderFromUrl(
+  encoded
+) {
+  if (!encoded) {
+    return null;
+  }
+
+  if (
+    typeof TextDecoder ===
+      "undefined" ||
+    typeof atob ===
+      "undefined"
+  ) {
+    throw new Error(
+      "Browser decoding APIs are unavailable."
+    );
+  }
+
+  try {
+    /*
+     * Convert URL-safe Base64 back
+     * to normal Base64.
+     */
+    const normalized =
+      String(encoded)
+        .replace(
+          /-/g,
+          "+"
+        )
+        .replace(
+          /_/g,
+          "/"
+        );
+
+    /*
+     * Restore Base64 padding.
+     */
+    const padded =
+      normalized +
+      "=".repeat(
+        (
+          4 -
+          (normalized.length %
+            4)
+        ) % 4
+      );
+
+    const bytes =
+      base64ToBytes(
+        padded
+      );
+
+    const json =
+      new TextDecoder().decode(
+        bytes
+      );
+
+    const order =
+      JSON.parse(
+        json
+      );
+
+    if (
+      !order ||
+      typeof order !== "object" ||
+      !order.orderId ||
+      !Array.isArray(
+        order.items
+      )
+    ) {
+      return null;
+    }
+
+    const items =
+      order.items.map(
+        (item) => ({
+          id:
+            item.id,
+
+          name:
+            getItemDisplayName(
+              item.name,
+              item.variantName
+            ),
+
+          variantName:
+            normalizeVariantName(
+              item.variantName
+            ),
+
+          price:
+            Number(
+              item.price || 0
+            ),
+
+          quantity:
+            Number(
+              item.quantity || 0
+            ),
+        })
+      );
+
+    /*
+     * Recalculate the total from the
+     * actual item data.
+     */
+    const calculatedTotal =
+      items.reduce(
+        (total, item) =>
+          total +
+          Number(
+            item.price || 0
+          ) *
+            Number(
+              item.quantity || 0
+            ),
+        0
+      );
+
+    return {
+      ...order,
+
+      cafe:
+        order.cafe ||
+        "Old Town Cafe",
+
+      table:
+        order.table ||
+        "T12",
+
+      items,
+
+      total:
+        calculatedTotal,
+    };
+  } catch {
+    return null;
+  }
 }

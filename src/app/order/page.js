@@ -25,17 +25,23 @@ import {
 } from "@/lib/cart";
 
 export default function OrderPage() {
-  const [order, setOrder] =
-    useState(null);
+  const [
+    order,
+    setOrder,
+  ] = useState(null);
 
-  const [copied, setCopied] =
-    useState(false);
+  const [
+    copied,
+    setCopied,
+  ] = useState(false);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [
+    loading,
+    setLoading,
+  ] = useState(true);
 
   /* =========================================================
-     LOAD CURRENT ORDER
+     LOAD EXACT ORDER
   ========================================================= */
 
   useEffect(() => {
@@ -46,24 +52,26 @@ export default function OrderPage() {
         );
 
       const orderId =
-        params.get("order");
+        params.get(
+          "order"
+        );
 
       /*
-        IMPORTANT:
-
-        getOrder checks the order ID against
-        the current active order.
-
-        Therefore an old order cannot
-        accidentally be loaded.
-      */
-
+       * The order ID from the URL must match
+       * the latest order stored locally.
+       *
+       * This prevents yesterday's order from
+       * appearing accidentally.
+       */
       const savedOrder =
-        getOrder(orderId);
+        getOrder(
+          orderId
+        );
 
-      if (savedOrder) {
-        setOrder(savedOrder);
-      }
+      setOrder(
+        savedOrder ||
+          null
+      );
     } catch {
       setOrder(null);
     } finally {
@@ -72,7 +80,7 @@ export default function OrderPage() {
   }, []);
 
   /* =========================================================
-     GENERATE WAITER URL
+     GENERATE WAITER QR URL
   ========================================================= */
 
   const qrUrl =
@@ -86,22 +94,20 @@ export default function OrderPage() {
       }
 
       /*
-        Encode the CURRENT order snapshot.
-      */
-
+       * Encode the COMPLETE order snapshot.
+       */
       const encodedOrder =
         encodeOrderForUrl(
           order
         );
 
       /*
-        QR destination:
-
-        /order/view?data=...
-
-        This is what the waiter scans.
-      */
-
+       * QR destination:
+       *
+       * /order/view?data=...
+       *
+       * The waiter will open this URL.
+       */
       return (
         `${window.location.origin}` +
         `/order/view?data=` +
@@ -125,13 +131,22 @@ export default function OrderPage() {
         qrUrl
       );
 
-      setCopied(true);
+      setCopied(
+        true
+      );
 
-      window.setTimeout(() => {
-        setCopied(false);
-      }, 1500);
+      window.setTimeout(
+        () => {
+          setCopied(
+            false
+          );
+        },
+        1500
+      );
     } catch {
-      setCopied(false);
+      setCopied(
+        false
+      );
     }
   }
 
@@ -166,12 +181,13 @@ export default function OrderPage() {
         <div className="text-center">
 
           <h1 className="font-serif text-2xl font-bold text-[#3e3025]">
-            No order found
+            Order not found
           </h1>
 
           <p className="mt-2 text-sm leading-6 text-[#806f5d]">
-            Please add items to your plate
-            and place an order first.
+            This order is no longer available.
+            Please add items to your plate and
+            place a new order.
           </p>
 
           <Link
@@ -224,10 +240,10 @@ export default function OrderPage() {
           </h1>
 
           <p className="mx-auto mt-2 max-w-[420px] text-sm leading-6 text-[#806f5d]">
-            The waiter can scan this QR
-            with Google Lens or another
-            QR scanner. It will open the
-            complete order on their phone.
+            The waiter scans this QR and is
+            taken directly to a formatted
+            order page containing every item,
+            quantity, price and total.
           </p>
 
         </div>
@@ -242,21 +258,21 @@ export default function OrderPage() {
 
           <div className="bg-[#4d3b2b] px-6 py-5 text-white">
 
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
 
-              <div>
+              <div className="min-w-0">
 
                 <p className="text-xs uppercase tracking-[0.15em] text-[#d8cbb9]">
                   Order
                 </p>
 
-                <p className="mt-1 font-serif text-2xl font-bold">
+                <p className="mt-1 break-all font-serif text-2xl font-bold">
                   {order.orderId}
                 </p>
 
               </div>
 
-              <div className="text-right">
+              <div className="shrink-0 text-right">
 
                 <p className="text-xs text-[#d8cbb9]">
                   Table
@@ -282,8 +298,8 @@ export default function OrderPage() {
 
                 <QRCodeSVG
                   value={qrUrl}
-                  size={240}
-                  level="L"
+                  size={250}
+                  level="M"
                   includeMargin
                 />
 
@@ -302,7 +318,9 @@ export default function OrderPage() {
 
           <div className="mx-6 mt-5 flex items-center gap-2 rounded-[16px] bg-[#f5ecdf] px-4 py-3 text-xs text-[#796956]">
 
-            <Clock size={15} />
+            <Clock
+              size={15}
+            />
 
             {formattedDate}
 
@@ -319,49 +337,44 @@ export default function OrderPage() {
             <div className="mt-3 space-y-3">
 
               {order.items.map(
-                (item) => (
+                (
+                  item,
+                  index
+                ) => (
+
                   <div
-                    key={item.id}
+                    key={`${item.id}-${item.variantName || "regular"}-${index}`}
                     className="flex items-start justify-between gap-4 text-sm"
                   >
 
-                    <div>
+                    <div className="min-w-0">
 
-                      <p className="font-semibold text-[#4d3b2b]">
-                        {item.quantity} ×{" "}
+                      <p className="font-semibold leading-5 text-[#4d3b2b]">
+
+                        {item.quantity}
+                        {" × "}
                         {item.name}
-                      </p>
 
-                      {item.variantName &&
-                        item.variantName.toLowerCase() !==
-                          "regular" &&
-                        !item.name
-                          .toLowerCase()
-                          .includes(
-                            item.variantName.toLowerCase()
-                          ) && (
-                          <p className="mt-1 text-[11px] text-[#917d68]">
-                            Option:{" "}
-                            {
-                              item.variantName
-                            }
-                          </p>
-                        )}
+                      </p>
 
                     </div>
 
                     <p className="shrink-0 font-semibold text-[#4d3b2b]">
+
                       ₹
                       {Number(
-                        item.price || 0
+                        item.price ||
+                          0
                       ) *
                         Number(
                           item.quantity ||
                             0
                         )}
+
                     </p>
 
                   </div>
+
                 )
               )}
 
@@ -381,15 +394,19 @@ export default function OrderPage() {
 
             </div>
 
-            {/* COPY URL */}
+            {/* COPY */}
 
             <button
               type="button"
-              onClick={handleCopy}
+              onClick={
+                handleCopy
+              }
               className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-[#d8c9b4] py-3.5 text-sm font-semibold text-[#4d3b2b] transition active:scale-[0.98]"
             >
 
-              <Copy size={17} />
+              <Copy
+                size={17}
+              />
 
               {copied
                 ? "Order Link Copied!"
@@ -401,9 +418,7 @@ export default function OrderPage() {
 
         </div>
 
-        {/* =================================================
-            INFORMATION
-        ================================================= */}
+        {/* INFORMATION */}
 
         <div className="mt-5 rounded-[22px] border border-[#dfd1bc] bg-[#fffaf1] p-5">
 
@@ -415,26 +430,25 @@ export default function OrderPage() {
 
             <br />
 
-            Show this QR code to the
-            waiter. Scanning it opens
-            the complete order with
-            item names, quantities,
-            prices and total.
+            Show this QR code to the waiter.
+            Scanning it opens the complete
+            order page with item names,
+            quantities, prices and total.
 
           </p>
 
         </div>
 
-        {/* =================================================
-            BACK TO MENU
-        ================================================= */}
+        {/* BACK */}
 
         <Link
           href="/menu"
           className="mt-5 flex items-center justify-center gap-2 py-3 text-sm font-semibold text-[#5e4d3b]"
         >
 
-          <Home size={17} />
+          <Home
+            size={17}
+          />
 
           Back to Menu
 

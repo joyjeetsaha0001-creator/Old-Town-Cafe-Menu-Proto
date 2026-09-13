@@ -21,7 +21,7 @@ import {
 } from "@/lib/cart";
 
 /* =========================================================
-   DATE FORMAT
+   DATE
 ========================================================= */
 
 function formatDate(value) {
@@ -57,32 +57,40 @@ function formatDate(value) {
 ========================================================= */
 
 export default function WaiterOrderPage() {
-  const [order, setOrder] =
-    useState(null);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [
+    order,
+    setOrder,
+  ] = useState(null);
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(true);
 
   /* =======================================================
-     READ ORDER FROM URL
+     READ ORDER FROM QR URL
   ======================================================= */
 
   useEffect(() => {
+
     try {
+
       const params =
         new URLSearchParams(
           window.location.search
         );
 
       /*
-        Read:
-
-        /order/view?data=...
-
-      */
+       * QR contains:
+       *
+       * /order/view?data=...
+       */
 
       const encodedOrder =
-        params.get("data");
+        params.get(
+          "data"
+        );
 
       const decodedOrder =
         decodeOrderFromUrl(
@@ -90,36 +98,57 @@ export default function WaiterOrderPage() {
         );
 
       setOrder(
-        decodedOrder
+        decodedOrder ||
+          null
       );
+
     } catch {
+
       setOrder(null);
+
     } finally {
-      setLoading(false);
+
+      setLoading(
+        false
+      );
+
     }
+
   }, []);
 
   /* =======================================================
-     CALCULATE TOTAL
+     TOTAL
   ======================================================= */
 
   const calculatedTotal =
     useMemo(() => {
-      if (!order) {
+
+      if (
+        !order ||
+        !Array.isArray(
+          order.items
+        )
+      ) {
         return 0;
       }
 
       return order.items.reduce(
-        (sum, item) =>
+        (
+          sum,
+          item
+        ) =>
           sum +
           Number(
-            item.price || 0
+            item.price ||
+              0
           ) *
             Number(
-              item.quantity || 0
+              item.quantity ||
+                0
             ),
         0
       );
+
     }, [order]);
 
   /* =======================================================
@@ -127,7 +156,9 @@ export default function WaiterOrderPage() {
   ======================================================= */
 
   if (loading) {
+
     return (
+
       <main className="flex min-h-screen items-center justify-center bg-[#fbf4e8] px-5">
 
         <div className="text-center">
@@ -141,15 +172,19 @@ export default function WaiterOrderPage() {
         </div>
 
       </main>
+
     );
+
   }
 
   /* =======================================================
-     INVALID QR / ORDER
+     INVALID ORDER
   ======================================================= */
 
   if (!order) {
+
     return (
+
       <main className="flex min-h-screen items-center justify-center bg-[#fbf4e8] px-5 py-8">
 
         <div className="w-full max-w-[520px] rounded-[28px] border border-[#dfd1bc] bg-[#fffaf1] p-7 text-center shadow-sm">
@@ -167,9 +202,8 @@ export default function WaiterOrderPage() {
           </h1>
 
           <p className="mt-2 text-sm leading-6 text-[#806f5d]">
-            Please ask the customer
-            to show the current QR
-            code again.
+            Please ask the customer to
+            show the current QR code again.
           </p>
 
           <Link
@@ -177,7 +211,9 @@ export default function WaiterOrderPage() {
             className="mt-6 inline-flex items-center gap-2 rounded-full bg-[#4d3b2b] px-6 py-3 text-sm font-bold text-white"
           >
 
-            <Home size={16} />
+            <Home
+              size={16}
+            />
 
             Go to Menu
 
@@ -186,20 +222,20 @@ export default function WaiterOrderPage() {
         </div>
 
       </main>
+
     );
+
   }
 
   const total =
-    calculatedTotal ||
-    Number(
-      order.total || 0
-    );
+    calculatedTotal;
 
   /* =======================================================
-     WAITer VIEW
+     WAITER VIEW
   ======================================================= */
 
   return (
+
     <main className="min-h-screen bg-[#fbf4e8] px-4 py-5">
 
       <div className="mx-auto w-full max-w-[560px] pb-8">
@@ -297,10 +333,12 @@ export default function WaiterOrderPage() {
               />
 
               <span>
+
                 {formatDate(
                   order.createdAt
                 ) ||
                   "Order time unavailable"}
+
               </span>
 
             </div>
@@ -329,20 +367,31 @@ export default function WaiterOrderPage() {
             <div className="mt-4 space-y-3">
 
               {order.items.map(
-                (item) => {
-                  const lineTotal =
-                    Number(
-                      item.price ||
-                        0
-                    ) *
+                (
+                  item,
+                  index
+                ) => {
+
+                  const quantity =
                     Number(
                       item.quantity ||
                         0
                     );
 
+                  const price =
+                    Number(
+                      item.price ||
+                        0
+                    );
+
+                  const lineTotal =
+                    price *
+                    quantity;
+
                   return (
+
                     <div
-                      key={item.id}
+                      key={`${item.id}-${item.variantName || "regular"}-${index}`}
                       className="rounded-[20px] border border-[#e4d7c4] bg-[#fcf6ed] p-4"
                     >
 
@@ -350,13 +399,13 @@ export default function WaiterOrderPage() {
 
                         <div className="min-w-0 flex-1">
 
-                          {/* ITEM NAME */}
+                          {/* FULL ITEM NAME */}
 
                           <p className="text-[17px] font-bold leading-6 text-[#3e3025]">
 
                             <span className="mr-1.5 inline-flex min-w-8 items-center justify-center rounded-full bg-[#66745b] px-2 py-1 text-xs font-bold text-white">
 
-                              {item.quantity}×
+                              {quantity}×
 
                             </span>
 
@@ -364,33 +413,41 @@ export default function WaiterOrderPage() {
 
                           </p>
 
-                          {/* VARIANT */}
+                          {/* FALLBACK VARIANT */}
 
                           {item.variantName &&
                             item.variantName.toLowerCase() !==
                               "regular" &&
-                            !item.name
+                            !String(
+                              item.name ||
+                                ""
+                            )
                               .toLowerCase()
                               .includes(
                                 item.variantName.toLowerCase()
                               ) && (
+
                               <p className="mt-2 text-xs font-medium text-[#88735d]">
+
                                 Option:{" "}
+
                                 {
                                   item.variantName
                                 }
+
                               </p>
+
                             )}
 
                           {/* UNIT PRICE */}
 
                           <p className="mt-2 text-xs text-[#927e68]">
+
                             ₹
-                            {Number(
-                              item.price ||
-                                0
-                            )}{" "}
+                            {price}
+                            {" "}
                             each
+
                           </p>
 
                         </div>
@@ -398,16 +455,18 @@ export default function WaiterOrderPage() {
                         {/* LINE TOTAL */}
 
                         <p className="shrink-0 text-base font-bold text-[#4d3b2b]">
+
                           ₹
-                          {
-                            lineTotal
-                          }
+                          {lineTotal}
+
                         </p>
 
                       </div>
 
                     </div>
+
                   );
+
                 }
               )}
 
@@ -436,7 +495,7 @@ export default function WaiterOrderPage() {
         </section>
 
         {/* =================================================
-            FOOTER MESSAGE
+            FOOTER
         ================================================= */}
 
         <div className="mt-4 rounded-[22px] border border-[#dfd1bc] bg-[#fffaf1] p-5 text-center">
@@ -446,9 +505,9 @@ export default function WaiterOrderPage() {
           </p>
 
           <p className="mt-1 text-xs leading-5 text-[#806f5d]">
-            Use this page as the
-            waiter&apos;s complete
-            order reference.
+            This page contains the
+            complete order reference
+            for the waiter.
           </p>
 
         </div>
@@ -456,5 +515,6 @@ export default function WaiterOrderPage() {
       </div>
 
     </main>
+
   );
 }
